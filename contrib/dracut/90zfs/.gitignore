@@ -4,5 +4,4 @@ mount-zfs.sh
 parse-zfs.sh
 zfs-generator.sh
 zfs-lib.sh
-zfs-load-key.sh
 zfs-needshutdown.sh

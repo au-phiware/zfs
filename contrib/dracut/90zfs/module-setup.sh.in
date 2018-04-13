@@ -38,6 +38,7 @@ install() {
 	inst_rules @udevruledir@/60-zvol.rules
 	dracut_install hostid
 	dracut_install grep
+	dracut_install @sbindir@/zdb
 	dracut_install @sbindir@/zfs
 	dracut_install @sbindir@/zpool
 	# Workaround for zfsonlinux/zfs#4749 by ensuring libgcc_s.so(.1) is included
@@ -64,11 +65,16 @@ install() {
 	if [ -n "$systemdutildir" ] ; then
 		inst_script "${moddir}/zfs-generator.sh" "$systemdutildir"/system-generators/dracut-zfs-generator
 	fi
-	inst_hook pre-mount 90 "${moddir}/zfs-load-key.sh"
 	inst_hook mount 98 "${moddir}/mount-zfs.sh"
 	inst_hook cleanup 99 "${moddir}/zfs-needshutdown.sh"
 	inst_hook shutdown 20 "${moddir}/export-zfs.sh"
 
+	if dracut_module_included "systemd"; then
+		inst_multiple -o \
+			$systemdsystemunitdir/systemd-ask-password-console.path \
+			$systemdsystemunitdir/systemd-ask-password-console.service \
+			systemd-ask-password systemd-tty-ask-password-agent
+	fi
 	inst_simple "${moddir}/zfs-lib.sh" "/lib/dracut-zfs-lib.sh"
 	if [ -e @sysconfdir@/zfs/zpool.cache ]; then
 		inst @sysconfdir@/zfs/zpool.cache

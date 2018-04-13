@@ -74,8 +74,34 @@ import_pool() {
 # mount_dataset DATASET
 #   mounts the given zfs dataset.
 mount_dataset() {
-        dataset="${1}"
+    dataset="${1}"
     mountpoint="$(zfs get -H -o value mountpoint "${dataset}")"
+    local keystatus="$(zfs get -H -o value keystatus "${dataset}")"
+    local encroot
+    local pphrase
+    local line
+
+    # Ensure encrypted datasets are available
+    if [ "${keystatus}" = "unavailable" ] ; then
+        pphrase=$(systemd-ask-password "Passphrase for '${dataset}':")
+        if [ $? -eq 0 ] ; then
+            line=$(echo $pphrase | zfs load-key "${dataset}" 2>&1)
+            if [ $? -ne 0 ] ; then
+                if [[ "$line" == *"Keys must be loaded for encryption root of '${dataset}' ("*")."* ]] ; then
+                    encroot=${line##*(}
+                    encroot=${encroot%%).*}
+                    if ! echo $pphrase | zfs load-key "${encroot}" ; then
+                        warn "ZFS: Unable to load key for dataset encryption root '${encroot}'"
+                        return 1
+                    fi
+                else
+                    echo $line >&2
+                    warn "ZFS: Unable to load key for dataset '${dataset}'"
+                    return 1
+                fi
+            fi
+        fi
+    fi
 
     # We need zfsutil for non-legacy mounts and not for legacy mounts.
     if [ "${mountpoint}" = "legacy" ] ; then
@@ -102,73 +128,4 @@ export_all() {
     IFS="${OLDIFS}"
 
     return ${ret}
-}
-
-# ask_for_password
-#
-# Wraps around plymouth ask-for-password and adds fallback to tty password ask
-# if plymouth is not present.
-#
-# --cmd command
-#   Command to execute. Required.
-# --prompt prompt
-#   Password prompt. Note that function already adds ':' at the end.
-#   Recommended.
-# --tries n
-#   How many times repeat command on its failure.  Default is 3.
-# --ply-[cmd|prompt|tries]
-#   Command/prompt/tries specific for plymouth password ask only.
-# --tty-[cmd|prompt|tries]
-#   Command/prompt/tries specific for tty password ask only.
-# --tty-echo-off
-#   Turn off input echo before tty command is executed and turn on after.
-#   It's useful when password is read from stdin.
-ask_for_password() {
-    ply_tries=3
-    tty_tries=3
-    while [ "$#" -gt 0 ]; do
-        case "$1" in
-            --cmd) ply_cmd="$2"; tty_cmd="$2"; shift;;
-            --ply-cmd) ply_cmd="$2"; shift;;
-            --tty-cmd) tty_cmd="$2"; shift;;
-            --prompt) ply_prompt="$2"; tty_prompt="$2"; shift;;
-            --ply-prompt) ply_prompt="$2"; shift;;
-            --tty-prompt) tty_prompt="$2"; shift;;
-            --tries) ply_tries="$2"; tty_tries="$2"; shift;;
-            --ply-tries) ply_tries="$2"; shift;;
-            --tty-tries) tty_tries="$2"; shift;;
-            --tty-echo-off) tty_echo_off=yes;;
-        esac
-        shift
-    done
-
-    { flock -s 9;
-        # Prompt for password with plymouth, if installed and running.
-        if whereis plymouth >/dev/null 2>&1 && plymouth --ping 2>/dev/null; then
-            plymouth ask-for-password \
-                --prompt "$ply_prompt" --number-of-tries="$ply_tries" \
-                --command="$ply_cmd"
-            ret=$?
-        else
-            if [ "$tty_echo_off" = yes ]; then
-                stty_orig="$(stty -g)"
-                stty -echo
-            fi
-
-            i=1
-            while [ "$i" -le "$tty_tries" ]; do
-                [ -n "$tty_prompt" ] && \
-                    printf "%s [%i/%i]:" "$tty_prompt" "$i" "$tty_tries" >&2
-                eval "$tty_cmd" && ret=0 && break
-                ret=$?
-                i=$((i+1))
-                [ -n "$tty_prompt" ] && printf '\n' >&2
-            done
-            unset i
-            [ "$tty_echo_off" = yes ] && stty "$stty_orig"
-        fi
-    } 9>/.console_lock
-
-    [ $ret -ne 0 ] && echo "Wrong password" >&2
-    return $ret
 }
